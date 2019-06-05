@@ -71,7 +71,6 @@ HEADER_SIZE = 100
 UNIT_SIZE = 5
 BREAK_MODES = ["lexic", "random"]
 
-
 """
 MGM supports two paramaters: 
 * break_mode
@@ -227,7 +226,7 @@ class MgmComputation(VariableComputation):
 
         assert computation_definition.algo.algo == "mgm"
         assert (computation_definition.algo.mode == "min") or (
-            computation_definition.algo.mode == "max"
+                computation_definition.algo.mode == "max"
         )
 
         super().__init__(computation_definition.node.variable, computation_definition)
@@ -357,7 +356,7 @@ class MgmComputation(VariableComputation):
             new_values, val_cost = self._compute_best_value()
             self._gain = self.current_cost - val_cost
             if ((self._mode == "min") & (self._gain > 0)) or (
-                (self._mode == "max") & (self._gain < 0)
+                    (self._mode == "max") & (self._gain < 0)
             ):
                 self._new_value = random.choice(new_values)
             else:

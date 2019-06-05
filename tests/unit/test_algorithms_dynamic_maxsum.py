@@ -38,7 +38,7 @@ from pydcop.dcop.objects import Variable
 from pydcop.dcop.relations import AsNAryFunctionRelation
 from pydcop.infrastructure.communication import InProcessCommunicationLayer, Messaging
 
-#
+
 class DynamicFunctionFactorComputationTest(unittest.TestCase):
     def test_init(self):
 
@@ -51,10 +51,9 @@ class DynamicFunctionFactorComputationTest(unittest.TestCase):
             return x1_ + x2_
 
         comp_def = MagicMock()
-        comp_def.algo.algo = "amaxsum"
+        comp_def.algo.algo = "maxsum"
         comp_def.algo.mode = "min"
-        comp_def.node.factor = phi
-        f = DynamicFunctionFactorComputation(comp_def=comp_def)
+        f = DynamicFunctionFactorComputation(phi, comp_def=comp_def)
 
         self.assertEqual(f.name, "phi")
 
@@ -72,11 +71,12 @@ class DynamicFunctionFactorComputationTest(unittest.TestCase):
             return x1_ - x2_
 
         comp_def = MagicMock()
-        comp_def.algo.algo = "amaxsum"
+        comp_def.algo.algo = "maxsum"
         comp_def.algo.mode = "min"
-        comp_def.node.factor = phi
-        f = DynamicFunctionFactorComputation(comp_def=comp_def)
-        f.message_sender = MagicMock()
+        f = DynamicFunctionFactorComputation(
+            phi, msg_sender=MagicMock(), comp_def=comp_def
+        )
+
         f.change_factor_function(phi2)
 
         self.assertEqual(f.name, "phi")
@@ -95,11 +95,11 @@ class DynamicFunctionFactorComputationTest(unittest.TestCase):
             return x1_ - x2_
 
         comp_def = MagicMock()
-        comp_def.algo.algo = "amaxsum"
+        comp_def.algo.algo = "maxsum"
         comp_def.algo.mode = "min"
-        comp_def.node.factor = phi
-        f = DynamicFunctionFactorComputation(comp_def=comp_def)
-        f.message_sender = MagicMock()
+        f = DynamicFunctionFactorComputation(
+            phi, msg_sender=MagicMock(), comp_def=comp_def
+        )
         f.change_factor_function(phi2)
 
         self.assertEqual(f.name, "phi")
@@ -120,11 +120,9 @@ class DynamicFunctionFactorComputationTest(unittest.TestCase):
             return x1_ - x2_ + x3_
 
         comp_def = MagicMock()
-        comp_def.algo.algo = "amaxsum"
+        comp_def.algo.algo = "maxsum"
         comp_def.algo.mode = "min"
-        comp_def.node.factor = phi
-
-        f = DynamicFunctionFactorComputation(comp_def=comp_def)
+        f = DynamicFunctionFactorComputation(phi, comp_def=comp_def)
         # Monkey patch post_msg method with dummy mock to avoid error:
         f.post_msg = types.MethodType(lambda w, x, y, z: None, f)
 
@@ -145,11 +143,9 @@ class DynamicFunctionFactorComputationTest(unittest.TestCase):
             return x1_ + x3_
 
         comp_def = MagicMock()
-        comp_def.algo.algo = "amaxsum"
+        comp_def.algo.algo = "maxsum"
         comp_def.algo.mode = "min"
-        comp_def.node.factor = phi
-
-        f = DynamicFunctionFactorComputation(comp_def=comp_def)
+        f = DynamicFunctionFactorComputation(phi, comp_def=comp_def)
 
         # Monkey patch post_msg method with dummy mock to avoid error:
         f.post_msg = types.MethodType(lambda w, x, y, z: None, f)

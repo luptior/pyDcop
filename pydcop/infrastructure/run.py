@@ -99,9 +99,7 @@ def solve(dcop: DCOP,
     if isinstance(algo_def, str):
         algo_module = load_algorithm_module(algo_def)
         algo_def = AlgorithmDef.build_with_default_param(
-            algo_def, parameters_definitions=algo_module.algo_params,
-            mode=dcop.objective
-        )
+            algo_def, parameters_definitions=algo_module.algo_params)
     else:
         algo_module = load_algorithm_module(algo_def.algo)
 

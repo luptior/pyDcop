@@ -1,91 +1,113 @@
-# BSD-3-Clause License
-#
-# Copyright 2017 Orange
-#
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-#
-# 1. Redistributions of source code must retain the above copyright notice,
-#    this list of conditions and the following disclaimer.
-#
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-#    this list of conditions and the following disclaimer in the documentation
-#    and/or other materials provided with the distribution.
-#
-# 3. Neither the name of the copyright holder nor the names of its contributors
-#    may be used to endorse or promote products derived from this software
-#    without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-# ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
-# LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-# CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-# SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-# INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-# CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-# POSSIBILITY OF SUCH DAMAGE.
-
-
 """
 
-DPOP algorithm
+MB-DPOP algorithm
+
+An extended for the DPOP algorithm which is based on the paper
+Petcu and Faltings 2006 https://infoscience.epfl.ch/record/98347
+
+
+This paper introduce a a new hybrid algorithm that is controlled by a parameter k which
+characterizes the amount of available memory. K specifies the maximal amount of inference
+or the maximal message dimensionality. The parameter is chosen such that the variable
+memory at each node is higher than d**k. (d is domain size)
+
+If k >= w (w is the induced width), full inference is done throughout the problem.
+If k = 1, only linear message are used.
+If k < w, full inference is done in the areas of width lower than k, and bounded inference
+in areas of width higher than k.
+
 --------------
 
-TODO
-
-
 
 """
+
 from random import choice
 from typing import Iterable
+import itertools
 
-from pydcop.infrastructure.computations import Message, VariableComputation, \
-    register
+from pydcop.infrastructure.computations import Message, VariableComputation, register
 from pydcop.dcop.objects import Variable
 from pydcop.dcop.relations import NAryMatrixRelation, RelationProtocol, \
     Constraint, get_data_type_max, get_data_type_min, generate_assignment, \
     generate_assignment_as_dict, filter_assignment_dict, find_arg_optimal, \
     DEFAULT_TYPE
-from pydcop.algorithms import ALGO_STOP, ALGO_CONTINUE, \
-    ComputationDef
+from pydcop.algorithms import AlgoParameterDef, ALGO_STOP, ALGO_CONTINUE, ComputationDef, \
+    check_param_value
 
 GRAPH_TYPE = 'pseudotree'
 
+"""
+MB DPOP supports one paramater: 
+* avail_mem
+
+default to be a large int, then MB-DPOP is normal dpop.
+"""
+algo_params = [
+    AlgoParameterDef("avail_mem", "int", 2 ** 32 - 1),
+]
+
+k = 2
+
 
 def build_computation(comp_def: ComputationDef):
+    """
+    takes in a computation definition and build the dpop algorithm by pass them to DpopAlgo
+
+    :param comp_def:
+    :return: computation = DpopAlgo(...)
+    """
 
     parent = None
     children = []
+    pseudo_parent = []
+    pseudo_children = []
     for l in comp_def.node.links:
         if l.type == 'parent' and l.source == comp_def.node.name:
             parent = l.target
         if l.type == 'children' and l.source == comp_def.node.name:
             children.append(l.target)
+        """
+        The pseudo relations are added for MB-DPOP
+        """
+        if l.type == 'pseudo_parent' and l.source == comp_def.node.name:
+            pseudo_parent.append(l.target)
+        if l.type == 'pseudo_children' and l.source == comp_def.node.name:
+            pseudo_children.append(l.target)
 
     constraints = [r for r in comp_def.node.constraints]
 
-    computation = DpopAlgo(comp_def.node.variable, parent,
-                           children, constraints,
+    computation = MBDpopAlgo(comp_def.node.variable, parent,
+                           children, pseudo_parent, pseudo_children, constraints,
                            comp_def=comp_def)
     return computation
 
 
-class DpopMessage(Message):
+class MBDpopMessage(Message):
+    """
+    A class for MB-DPOP message
+
+    :
+    TODO
+
+    It is unclear if an extension is needed
+
+
+    """
+
     def __init__(self, msg_type, content):
-        super(DpopMessage, self).__init__(msg_type, content)
+        super(MBDpopMessage, self).__init__(msg_type, content)
 
     @property
     def size(self):
-        # Dpop messages
-        # UTIL : multi-dimensional matrices
-        # VALUE :
+        # MBDpop messages
+        # UTIL : context & multi-dimensional matrices
+        # VALUE : a value assignment for each var in the
+        #             separator of the sender
+        # LABEL : 2 lists, for separator and cycle_cuts
 
         if self.type == 'UTIL':
             # UTIL messages are multi-dimensional matrices
-            shape = self.content.shape
+            shape = self.content[1].shape
             size = 1
             for s in shape:
                 size *= s
@@ -96,8 +118,12 @@ class DpopMessage(Message):
             # separator of the sender
             return len(self.content[0]) * 2
 
+        elif self.type == 'LABEL':
+            # LABEL message are 2 lists, for separator and cycle_cuts
+            return len(self.content[0]) + len(self.content[1])
+
     def __str__(self):
-        return 'DpopMessage({}, {})'.format(self._msg_type, self._content)
+        return 'MBDpopMessage({}, {})'.format(self._msg_type, self._content)
 
 
 def join_utils(u1: Constraint, u2: Constraint) -> Constraint:
@@ -128,7 +154,6 @@ def join_utils(u1: Constraint, u2: Constraint) -> Constraint:
 
     u_j = NAryMatrixRelation(dims, name='joined_utils')
     for ass in generate_assignment_as_dict(dims):
-
         # FIXME use dict for assignement
         # for Get AND sett value
 
@@ -140,7 +165,7 @@ def join_utils(u1: Constraint, u2: Constraint) -> Constraint:
     return u_j
 
 
-def projection(a_rel, a_var, mode='max'):
+def projection(a_rel, a_var, mode='max', a_var_val=""):
     """
 
     The project of a relation a_rel along the variable a_var is the
@@ -156,7 +181,9 @@ def projection(a_rel, a_var, mode='max'):
 
     :param a_rel: the projected relation
     :param a_var: the variable over which to project
-    :param mode: 'max (default) for maximization, 'min' for minimization.
+    :param mode: 'max (default) for maximization, 'min' for minimization,
+                    'context' for passing an assignment
+    :param a_var_val: the context value for variable a_var if context mode is set.
 
     :return: the new relation resulting from the projection
     """
@@ -172,20 +199,25 @@ def projection(a_rel, a_var, mode='max'):
         # for each assignment, look for the max value when iterating over
         # aVar domain
 
-        if mode == 'min':
-            best_val = get_data_type_max(DEFAULT_TYPE)
+        if mode != "context":
+            if mode == 'min':
+                best_val = get_data_type_max(DEFAULT_TYPE)
+            else:
+                best_val = get_data_type_min(DEFAULT_TYPE)
+
+            for val in a_var.domain:
+                full_assignment = _add_var_to_assignment(partial_assignment,
+                                                         a_rel.dimensions, a_var,
+                                                         val)
+
+                current_val = a_rel.get_value_for_assignment(full_assignment)
+                if (mode == 'max' and best_val < current_val) or \
+                        (mode == 'min' and best_val > current_val):
+                    best_val = current_val
         else:
-            best_val = get_data_type_min(DEFAULT_TYPE)
-
-        for val in a_var.domain:
-            full_assignment = _add_var_to_assignment(partial_assignment,
-                                                     a_rel.dimensions, a_var,
-                                                     val)
-
-            current_val = a_rel.get_value_for_assignment(full_assignment)
-            if (mode == 'max' and best_val < current_val) or \
-               (mode == 'min' and best_val > current_val):
-                best_val = current_val
+            if a_var_val == "":
+                raise ValueError("Model context has been set but value is not passed in.")
+            best_val = a_var_val
 
         proj_rel = proj_rel.set_value_for_assignment(partial_assignment,
                                                      best_val)
@@ -211,7 +243,7 @@ def _add_var_to_assignment(partial_assignt, ass_vars, new_var, new_value):
 
     """
 
-    if len(partial_assignt)+1 != len(ass_vars):
+    if len(partial_assignt) + 1 != len(ass_vars):
         raise ValueError('Length of partial assignment and variables do not '
                          'match.')
     full_assignment = partial_assignt[:]
@@ -221,16 +253,16 @@ def _add_var_to_assignment(partial_assignt, ass_vars, new_var, new_value):
     return full_assignment
 
 
-class DpopAlgo(VariableComputation):
+class MBDpopAlgo(VariableComputation):
     """
     Dynamic programming Optimization Protocol
 
-    This class represents the DPOP algorithm.
+    This class represents the MB-DPOP algorithm.
 
     When running this algorithm, the DFS tree must be already defined and the
     children, parents and pseudo-parents must be known.
 
-    Two kind of messages:
+    Three kind of messages:
     * UTIL message:
       sent from children to parent, contains a relation (as a
       multi-dimensional matrix) with one dimension for each variable in our
@@ -239,11 +271,16 @@ class DpopAlgo(VariableComputation):
       contains the value of the parent of the node and the values of all
       variables that were present in our UTIl message to our parent (that is
       to say, our separator) .
-
+    * LABEL messages :
+      contains 2 lists, for separator and cycle_cuts
     """
 
-    def __init__(self, variable: Variable, parent: str,
+    def __init__(self,
+                 variable: Variable,
+                 parent: str,
                  children: Iterable[str],
+                 pseudo_parent: Iterable[str],
+                 pseudo_children: Iterable[str],
                  constraints: Iterable[RelationProtocol],
                  msg_sender=None, comp_def=None):
         """
@@ -301,7 +338,7 @@ class DpopAlgo(VariableComputation):
 
         self._children_separator = {}
 
-        self._waited_children = []
+        self._waited_children_util = []
         if not self.is_leaf:
             # If we are not a leaf, we must wait for the util messages from
             # our children.
@@ -309,7 +346,25 @@ class DpopAlgo(VariableComputation):
             # may get an util message from one of our children before
             # running on_start, if this child computation start faster of
             # before us
-            self._waited_children = self._children[:]
+            self._waited_children_util = self._children[:]
+
+        """
+        The following fields are added for MB-DPOP
+        Initialize the separators as the union of parent and pseudoparent, 
+        separators might have different definitions for the parts from original DPOP 
+        implementation. 
+        """
+        self._pparent = pseudo_parent
+        self._pchildren = pseudo_children
+        # sep_i in the paper
+        self._separators = [x for x in set(pseudo_parent) | set(self._parent)]
+        # cc_lists in the paper, hasn't been unioned
+        self._cc_children = []
+        # cc_i in the paper
+        self._cc = []
+        self._waited_children_label = self._waited_children_util
+        self._label_CR= "undecided"
+        self._cache = {}
 
     def footprint(self):
         return computation_memory(self.computation_def.node)
@@ -335,10 +390,10 @@ class DpopAlgo(VariableComputation):
             # Note: as a leaf, our separator is the union of our parents and
             # pseudo-parents
             util = self._compute_utils_msg()
-            self.logger.info('Leaf %s init message %s -> %s  : %s',
+            self.logger.info('Leaf {} init message {} -> {}  : {}'.format(
                              self._variable.name, self._variable.name,
-                             self._parent, util)
-            msg = DpopMessage('UTIL', util)
+                             self._parent, util))
+            msg = MBDpopMessage('UTIL', [[] ,util])
             self.post_msg(self._parent, msg)
             msg_count += 1
             msg_size += msg.size
@@ -362,6 +417,9 @@ class DpopAlgo(VariableComputation):
 
     def stop_condition(self):
         # dpop stop condition is easy at it only selects one single value !
+
+        #TODO
+        # If the Condition also holds for MB_DPOP
         if self.current_value is not None:
             return ALGO_STOP
         else:
@@ -391,62 +449,80 @@ class DpopAlgo(VariableComputation):
 
     @register("UTIL")
     def _on_util_message(self, variable_name, recv_msg, t):
-        self.logger.debug('Util message from %s : %r ',
-                          variable_name, recv_msg.content)
-        utils = recv_msg.content
+        self.logger.debug(f'Util message from {variable_name} : {recv_msg.content} ')
+        context, utils = recv_msg.content
         msg_count, msg_size = 0, 0
 
-        # accumulate util messages until we got the UTIL from all our children
-        self._joined_utils = join_utils(self._joined_utils, utils)
-        try:
-            self._waited_children.remove(variable_name)
-        except ValueError as e:
-            self.logger.error('Unexpected UTIL message from %s on %s : %r ',
-                              variable_name, self.name, recv_msg)
-            raise e
-        # keep a reference of the separator of this children, we need it when
-        # computing the value message
-        self._children_separator[variable_name] = utils.dimensions
+        """
+        This part is done according to the Algo 1 UTIL propagation protocol
+        """
+        if self._label_CR == "normal":
+            # it is a normal node
 
-        if len(self._waited_children) == 0:
+            # accumulate util messages until we got the UTIL from all our children
+            self._joined_utils = join_utils(self._joined_utils, utils)
+            try:
+                self._waited_children_util.remove(variable_name)
+            except ValueError as e:
+                self.logger.error(f'Unexpected UTIL message from {variable_name} on {self.name} : {recv_msg} ')
+                raise e
+            # keep a reference of the separator of this children, we need it when
+            # computing the value message
+            self._children_separator[variable_name] = utils.dimensions
 
-            if self.is_root:
-                # We are the root of the DFS tree and have received all utils
-                # we can select our own value and start the VALUE phase.
+            if len(self._waited_children_util) == 0:
 
-                # The root obviously has no parent nor pseudo parent, yet it
-                # may have unary relations (with it-self!)
-                for r in self._constraints:
-                    self._joined_utils = join_utils(self._joined_utils, r)
+                if self.is_root:
+                    # We are the root of the DFS tree and have received all utils
+                    # we can select our own value and start the VALUE phase.
 
-                values, current_cost = find_arg_optimal(
-                    self._variable, self._joined_utils, self._mode)
-                selected_value = values[0]
+                    # The root obviously has no parent nor pseudo parent, yet it
+                    # may have unary relations (with it-self!)
+                    for r in self._constraints:
+                        self._joined_utils = join_utils(self._joined_utils, r)
 
-                self.logger.info('ROOT: On UNTIL message from %s, send value '
-                                 'msg to childrens %s ',
-                                  variable_name, self._children)
-                for c in self._children:
-                    msg = DpopMessage('VALUE', ([self._variable],
-                                                [selected_value]))
-                    self.post_msg(c, msg)
+                    values, current_cost = find_arg_optimal(
+                        self._variable, self._joined_utils, self._mode)
+                    selected_value = values[0]
+
+                    self.logger.info(f'ROOT: On UNTIL message from {variable_name}, send value \
+                                        msg to childrens {self._children} ')
+                    for c in self._children:
+                        msg = MBDpopMessage('VALUE', ([self._variable],
+                                                      [selected_value]))
+                        self.post_msg(c, msg)
+                        msg_count += 1
+                        msg_size += msg.size
+
+                    self.select_value_and_finish(selected_value,
+                                                 float(current_cost))
+                else:
+                    # We have received the Utils msg from all our children, we can
+                    # now compute our own utils relation by joining the accumulated
+                    # util with the relations with our parent and pseudo_parents.
+                    util = self._compute_utils_msg()
+                    msg = MBDpopMessage('UTIL', [[], util])
+                    self.logger.info(f'On UTIL message from {variable_name}, send UTILS msg '
+                                     f'to parent  { self._children}')
+                    self.post_msg(self._parent, msg)
                     msg_count += 1
                     msg_size += msg.size
+        else:
+            # the node is abnormal node
 
-                self.select_value_and_finish(selected_value,
-                                             float(current_cost))
-            else:
-                # We have received the Utils msg from all our children, we can
-                # now compute our own utils relation by joining the accumulated
-                # util with the relations with our parent and pseudo_parents.
-                util = self._compute_utils_msg()
-                msg = DpopMessage('UTIL', util)
-                self.logger.info('On UTIL message from %s, send UTILS msg '
-                                 'to parent %s ',
-                                  variable_name, self._children)
-                self.post_msg(self._parent, msg)
-                msg_count += 1
-                msg_size += msg.size
+            # do propagations for all instantiation of CClist
+            for instantiation in self._cache.keys():
+                # a value assignment
+                context = { self._separators[i]:instantiation[i] for i in range(instantiation)}
+
+                # do propagation
+
+            if self._label_CR == "CR":
+
+                # update UTIL and Cache for each propagation
+
+                # when propagation finishes , send UTIL to parents
+
 
     def _compute_utils_msg(self):
 
@@ -460,8 +536,7 @@ class DpopAlgo(VariableComputation):
 
     @register("VALUE")
     def _on_value_message(self, variable_name, recv_msg, t):
-        self.logger.debug('{}: on value message from {} : "{}"'
-                          .format(self.name, variable_name, recv_msg))
+        self.logger.debug(f'{self.name}: on value message from {variable_name} : "{recv_msg}"')
 
         value = recv_msg.content
         msg_count, msg_size = 0, 0
@@ -495,9 +570,104 @@ class DpopAlgo(VariableComputation):
                     # we want an intersection, we can ignore the variable if
                     # not in value_dict
                     pass
-            msg = DpopMessage('VALUE', (variables_msg, values_msg))
+            msg = MBDpopMessage('VALUE', (variables_msg, values_msg))
             msg_count += 1
             msg_size += msg.size
             self.post_msg(c, msg)
 
         self.select_value_and_finish(selected_value, float(current_cost))
+
+    """
+    Labeling should be done before UTIL
+    """
+
+    @register("LABEL")
+    def _on_label_message(self, variable_name, recv_msg, t):
+        self.logger.debug(f'{self.name}: on label message from {variable_name} : "{recv_msg}"')
+
+        label = recv_msg.content
+        msg_count, msg_size = 0, 0
+
+        # Value msg contains 2 list, one is the separator and
+        # one is the list of CC nodes for its sender
+        [recv_sep, recv_cc] = label
+
+        # accumulate util messages until we got the LABEL from all our children
+        self.union_seperators(recv_sep)
+        self._cc_children.append(recv_cc)
+
+        try:
+            self._waited_children_label.remove(variable_name)
+        except ValueError as e:
+            self.logger.error(f'Unexpected LABEL message from {variable_name} on {self.name} : {recv_msg} ')
+            raise e
+
+        if len(self._waited_children_label) == 0:
+            """
+            Heuristic labelling of nodes as CC:
+            If the separator of Sep_i of node X_i contains more than k nodes, then
+            this ensures that enough of them will be labeled as cycle_cuts
+
+            This part is done based on Algo 1: Labeling Protocol in the original paper
+
+            TODO
+
+            It is unclear if random pick is good enough or mechanism 1 and 2 are needed.
+
+            """
+
+            # get a union of all cc received from children
+            cc_set = [set(x) for x in self._cc_children]
+            cc_lists = set().union(*cc_set)
+
+            if len(self._separators) <= k:
+
+                if len(cc_lists) != 0:
+                    self._label_CR="CR"
+                    # the following step creates a idealogical cache table
+                    # some function gets the domain of sep
+                    # domains = [get_domain(sep) for sep in self._separators]
+                    # TODO
+                    # here I simplified the situation
+                    # cache table will be { (val_sep1, val_sep2, ...): .}
+                    domains = [ [x for x in self._variable.domain] for sep in self._separators]
+                    domain_combination = list(itertools.product(*domains))
+                    self._cache = { instantiation:"" for instantiation in domain_combination}
+                else:
+                    self._label_CR="normal"
+
+                self._cc=[]
+
+            else:
+
+                # n are the nodes in sep_i but not marked as CC nodes by X_i's children
+                N = set(self._separators) - cc_lists
+                # select a new set of cycle cuts of length |N|-k
+                # here I take the random way, should be updated to use mech1 or mech 2
+                cc_new = set([x for x in N][:len(N) - k])
+                self._cc = cc_lists | cc_new
+
+            msg = MBDpopMessage('LABEL', [self._separators, self._cc])
+            self.logger.info(f'On LABEL message from {variable_name}, \
+                                send LABEL msg to parent {self._parent}')
+            self.post_msg(self._parent, msg)
+            msg_count += 1
+            msg_size += msg.size
+
+
+    def union_seperators(self, recv_sep):
+        """
+        Def:
+        Ancestors of Xi which are direcly connected with Xi or descendants of Xi.
+
+        Which can be easily determined by the union of
+        a) seperators received from its children
+        b) its parents and pp minus its self
+
+        :return:
+
+        a list of seperator nodes
+
+        """
+
+        self._separators = list(set(self._separators) | set(recv_sep))

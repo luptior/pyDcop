@@ -28,32 +28,55 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
+"""
+To be add
+
+how to proporly split packages into smaller parts based on the constrains to speed up
 
 
 
 """
-Saving and loading replica distribution to and from yaml.
+
+import numpy as np
+from sympy.solvers import solve
+from sympy import Symbol
+from sklearn.linear_model import LinearRegression
 
 
-"""
-import yaml
-
-from pydcop.replication.objects import ReplicaDistribution
+def func1(size: float) -> float:
+    return 20 * size
 
 
-def load_replica_dist_from_file(filename: str) -> ReplicaDistribution:
-    with open(filename, mode='r', encoding='utf-8') as f:
-        content = f.read()
-    if content:
-        return load_replica_dist(content)
+def func2(size: float) -> float:
+    return 2 * size + 10
 
-def load_replica_dist(dist_str: str) -> ReplicaDistribution:
-    loaded = yaml.load(dist_str)
 
-    if 'replica_dist' not in loaded:
-        raise ValueError('Invalid replica distribution file')
+def sending_time_size(size: float) -> float:
+    """the transmission time based on the input file size in MB, return time in second"""
+    return size / 100 + 0.01
 
-    loaded_dist = loaded['replica_dist']
 
-    return ReplicaDistribution(loaded_dist)
+def sending_time_size_with_lossp(size: float, lossprop: float = 0.1, timeout: float = 10.) -> float:
+    """
+    The transmission time based on the input file size in MB, return time in second
+    if lost, the time return will be timeout +1, so the the action when timeout happen will occured.
+    """
+    if lossprop <= np.random.ranf():
+        return size / 100 + 0.01
+    else:
+        return timeout + 1
 
+
+def linear_optimze(x: list, y: list, x_pred):
+    """
+    x: input msg sizes in MB
+    y: The transmission times
+    """
+    x = np.array(x).reshape((-1, 1))
+    y = np.array(y)
+
+    model = LinearRegression().fit(x, y)
+
+    y_pred = model.predict(x_pred)
+
+    return y_pred

@@ -44,7 +44,7 @@ all:
 
         # Path to pyDOCP sources, clone github repository to have these sources.
         # Note: do NOT forget the trailing '/' !!
-        pydcop_local_src: /home/pierre/Projects/These/github/pyDcop/
+        pydcop_local_src: /home/pierre/Projects/These/github/pyDcop_wMailer/
 
         # Path to pyDOCP-ui sources
         # Note: do NOT forget the trailing '/' !!

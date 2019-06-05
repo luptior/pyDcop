@@ -64,17 +64,17 @@
     shell: "sshpass -p '{{ansible_ssh_pass}}' \
             rsync -arcP --delete --exclude='.git' \
             {{ pydcop_local_src }} \
-            {{ansible_ssh_user}}@{{hostvars[inventory_hostname]['ansible_default_ipv4']['address']}}:~/pyDcop"    
+            {{ansible_ssh_user}}@{{hostvars[inventory_hostname]['ansible_default_ipv4']['address']}}:~/pyDcop_wMailer"
     delegate_to: localhost
 
   - name: install pydcop
-    command: "sudo pip3 install --trusted-host {{controller_proxy_addr}} ~/pyDcop"
+    command: "sudo pip3 install --trusted-host {{controller_proxy_addr}} ~/pyDcop_wMailer"
 
   - name: copy pydcop-ui files
     shell: "sshpass -p '{{ansible_ssh_pass}}' \
             rsync -arcP --delete --exclude='.git' \
             {{ pydcop_ui_local_src }}/dist \
-            {{ansible_ssh_user}}@{{hostvars[inventory_hostname]['ansible_default_ipv4']['address']}}:~/pyDcop-ui"    
+            {{ansible_ssh_user}}@{{hostvars[inventory_hostname]['ansible_default_ipv4']['address']}}:~/pyDcop_wMailer-ui"
     delegate_to: localhost
 
   - name: copy service file

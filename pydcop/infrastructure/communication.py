@@ -30,6 +30,7 @@
 
 
 import json
+import sys
 import logging
 import socket
 from collections import namedtuple, defaultdict
@@ -45,6 +46,8 @@ from requests.exceptions import ConnectionError
 
 from pydcop.infrastructure.discovery import UnknownComputation, UnknownAgent
 from pydcop.utils.simple_repr import simple_repr, from_repr
+from pydcop.utils.optimizor import sending_time_size
+
 
 logger = logging.getLogger("infrastructure.communication")
 
@@ -250,12 +253,12 @@ class InProcessCommunicationLayer(CommunicationLayer):
         try:
             address = self.discovery.agent_address(dest_agent)
             address.receive_msg(src_agent, dest_agent, msg)
-
-
         except UnknownAgent:
             logger.warning(
-                f"Sending message from {src_agent} to unknown agent {dest_agent} :"
-                f" {msg} "
+                "Sending message from %s to unknown agent %s : %s ",
+                src_agent,
+                dest_agent,
+                msg,
             )
             return self._on_send_error(
                 src_agent, dest_agent, msg, on_error, UnknownAgent
@@ -580,7 +583,18 @@ class Messaging(object):
         try:
             msg_type, _, t, full_msg = self._queue.get(block=True, timeout=timeout)
             if self._delay and msg_type == MSG_ALGO:
-                sleep(self._delay)
+                """
+                where the delay based on size can come in
+                if we want to use this method, then rather than the actual value will be used, 
+                self._delay will be a boolean
+                size: the size of the message size in bytes
+                """
+                size = sys.getsizeof(full_msg)
+                print(f"full_msg is {size} bytes")
+                # delay = sending_time_size(size)
+                # sleep(delay)
+
+                # sleep(self._delay)
             return full_msg, t
         except Empty:
             return None, None

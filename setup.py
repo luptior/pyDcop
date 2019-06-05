@@ -110,7 +110,7 @@ setup(
 
     project_urls={
         'Documentation':  'http://pydcop.readthedocs.io',
-        'Source': 'https://github.com/Orange-OpenSource/pyDcop',
-        'Bug Reports': 'https://github.com/Orange-OpenSource/pyDcop/issues'
+        'Source': 'https://github.com/Orange-OpenSource/pyDcop_wMailer',
+        'Bug Reports': 'https://github.com/Orange-OpenSource/pyDcop_wMailer/issues'
     }    
 )

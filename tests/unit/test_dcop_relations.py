@@ -35,13 +35,7 @@ import numpy as np
 import pytest
 
 import pydcop.dcop.objects
-from pydcop.dcop.objects import (
-    VariableDomain,
-    Variable,
-    ExternalVariable,
-    Domain,
-    VariableWithCostFunc,
-)
+from pydcop.dcop.objects import VariableDomain, Variable, ExternalVariable, Domain
 from pydcop.dcop.relations import (
     NAryFunctionRelation,
     is_compatible,
@@ -90,7 +84,7 @@ class ZeroAryRelationTest(unittest.TestCase):
 
     def test_set_value(self):
 
-        r1 = self.r0.set_value_for_assignment({}, 21)
+        r1 = self.r0.set_value_for_assignment([], 21)
         self.assertEqual(r1(), 21)
 
     def test_slicing_on_no_var_is_ok(self):
@@ -1672,31 +1666,6 @@ def test_assignment_cost_two_constraints_two_vars():
     assert assignment_cost({"v1": 2, "v2": 5}, [c1, c2]) == 17
 
 
-def test_assignment_cost_two_constraints_two_vars_one_extra():
-    domain = VariableDomain("d", "test", list(range(10)))
-    v1 = Variable("v1", domain)
-    v2 = Variable("v2", domain)
-    c1 = constraint_from_str("c1", "v1+v2", [v1, v2])
-    c2 = constraint_from_str("c2", "v1*v2", [v1, v2])
-
-    assert assignment_cost({"v1": 2}, [c1, c2], v2=5) == 17
-
-
-def test_assignment_cost_two_constraints_two_costed_vars():
-    domain = VariableDomain("d", "test", list(range(10)))
-    v1 = VariableWithCostFunc("v1", domain, cost_func=lambda x: 0.1 * x)
-    v2 = VariableWithCostFunc("v2", domain, cost_func=lambda x: 0.2 * x)
-    c1 = constraint_from_str("c1", "v1+v2", [v1, v2])
-    c2 = constraint_from_str("c2", "v1*v2", [v1, v2])
-
-    # We can select if we want to consider variable costs
-    assert assignment_cost({"v1": 2, "v2": 5}, [c1, c2]) == 17
-    assert (
-        assignment_cost({"v1": 2, "v2": 5}, [c1, c2], consider_variable_cost=True)
-        == 18.2
-    )
-
-
 def test_assignment_cost_missing_vars():
     domain = VariableDomain("d", "test", list(range(10)))
     v1 = Variable("v1", domain)
@@ -1732,11 +1701,7 @@ def test_bench_compute_cost(benchmark):
     c4 = constraint_from_str("c4", "x3 - x2 -7", all_vars)
 
     def to_bench():
-        assignment_cost(
-            {"x1": 3, "x2": 4, "x3": 1, "x4": 2},
-            [c1, c2, c3, c4],
-            consider_variable_cost=True,
-        )
+        assignment_cost({"x1": 3, "x2": 4, "x3": 1, "x4": 2}, [c1, c2, c3, c4])
 
     benchmark(to_bench)
 
@@ -1756,225 +1721,3 @@ def test_assignment_cost_same_as_becnh():
     cost = assignment_cost({"x1": 3, "x2": 4, "x3": 1, "x4": 2}, [c1, c2, c3, c4])
 
     assert cost == -18
-
-
-def test_relation_from_str_with_map():
-    x1 = Variable("x1", list(range(5)))
-    x2 = Variable("x2", list(range(5)))
-    all_vars = [x1, x2]
-
-    c1 = constraint_from_str(
-        "c1",
-        "{('R', 'B'): 0, "
-        " ('R', 'R'): 5, "
-        " ('B', 'B'): 3, "
-        " ('B', 'R'): 1 "
-        "}[(x1, x2)]",
-        all_vars,
-    )
-
-    cost = assignment_cost({"x1": "R", "x2": "B"}, [c1])
-    assert cost == 0
-    assert (c1(x1="B", x2="B")) == 3
-
-
-class JoinRelationsTestCase:
-    def test_arity_bothsamevar(self):
-        x1 = Variable("x1", ["a", "b", "c"])
-        u1 = NAryMatrixRelation([x1])
-        u2 = NAryMatrixRelation([x1])
-
-        u_j = pydcop.dcop.relations.join(u1, u2)
-
-        assert u_j.arity == 1
-
-    def test_arity_2diffvar(self):
-        x1 = Variable("x1", ["a", "b", "c"])
-        u1 = NAryMatrixRelation([x1])
-
-        x2 = Variable("x2", ["1", "2"])
-        u2 = NAryMatrixRelation([x2])
-
-        u_j = pydcop.dcop.relations.join(u1, u2)
-
-        assert u_j.arity == 2
-
-    def test_arity_3diffvar(self):
-        x1 = Variable("x1", ["a", "b", "c"])
-        x2 = Variable("x2", ["1", "2"])
-        u1 = NAryMatrixRelation([x1, x2])
-
-        x3 = Variable("x3", ["z", "y"])
-        u2 = NAryMatrixRelation([x2, x3])
-
-        u_j = pydcop.dcop.relations.join(u1, u2)
-
-        assert u_j.arity == 3
-
-    def test_join_bothsamevar(self):
-        x1 = Variable("x1", ["a", "b", "c"])
-        u1 = NAryMatrixRelation([x1], np.array([1, 2, 3], np.int8))
-        u2 = NAryMatrixRelation([x1], np.array([1, 2, 3], np.int8))
-
-        # x1 = Variable('x1', ['a', 'b', 'c'])
-        # u1 = dpop.NAryRelation([x1], np.array([1, 2, 3], np.int8))
-
-        assert u1.get_value_for_assignment(["b"]) == 2
-
-        u_j = pydcop.dcop.relations.join(u1, u2)
-
-        assert u_j.arity == 1
-        assert u_j.get_value_for_assignment(["a"]) == 2
-        assert u_j.get_value_for_assignment(["b"]) == 4
-        assert u_j.get_value_for_assignment(["c"]) == 6
-
-    def test_join_2diffvar(self):
-        x1 = Variable("x1", ["a", "b", "c"])
-        u1 = NAryMatrixRelation([x1], np.array([2, 4, 8], np.int8))
-
-        x2 = Variable("x2", ["1", "2"])
-        u2 = NAryMatrixRelation([x2], np.array([1, 3], np.int8))
-
-        u_j = pydcop.dcop.relations.join(u1, u2)
-
-        assert u_j.arity == 2
-
-        assert u_j.get_value_for_assignment(["a", "1"]) == 3
-        assert u_j.get_value_for_assignment(["c", "2"]) == 11
-        assert u_j.get_value_for_assignment(["b", "1"]) == 5
-
-    def test_join_3diffvar(self):
-        x1 = Variable("x1", ["a", "b", "c"])
-        x2 = Variable("x2", ["1", "2"])
-        u1 = NAryMatrixRelation(
-            [x1, x2], np.array([[2, 16], [4, 32], [8, 64]], np.int8)
-        )
-
-        x3 = Variable("x3", ["z", "y"])
-        u2 = NAryMatrixRelation([x2, x3], np.array([[1, 5], [3, 7]], np.int8))
-
-        u_j = pydcop.dcop.relations.join(u1, u2)
-
-        assert u_j.arity == 3
-        assert u_j.dimensions, [x1, x2, x3]
-
-        assert u_j.get_value_for_assignment(["a", "1", "z"]) == 3
-        assert u_j.get_value_for_assignment(["b", "2", "y"]) == 39
-
-    def test_join_with_no_var_rel(self):
-        # join a relation with a relation with no dimension
-
-        x1 = Variable("x1", ["a", "b", "c"])
-        x2 = Variable("x2", ["1", "2"])
-        u1 = NAryMatrixRelation(
-            [x1, x2], np.array([[2, 16], [4, 32], [8, 64]], np.int8)
-        )
-        u2 = NAryMatrixRelation([])
-
-        u_j = pydcop.dcop.relations.join(u1, u2)
-
-        assert u_j.arity == 2
-        assert u_j.dimensions == [x1, x2]
-
-        assert u_j.get_value_for_assignment(["a", "1"]) == 2
-        assert u_j.get_value_for_assignment(["b", "2"]) == 32
-        assert u_j(x1="a", x2="1") == 2
-        assert u_j(x1="b", x2="2") == 32
-
-    def test_join_different_order(self):
-        # Test joining 2 relations that do not declare their variable in the
-        # same order
-
-        x1 = Variable("x1", [0, 1, 2])
-        x2 = Variable("x2", [0, 1, 2])
-
-        @AsNAryFunctionRelation(x1, x2)
-        def u1(x, y):
-            return x + y
-
-        @AsNAryFunctionRelation(x2, x1)
-        def u2(x, y):
-            return x - y
-
-        j = pydcop.dcop.relations.join(u1, u2)
-
-        assert j(1, 1) == 2
-        assert j(1, 2) == 4
-        assert j(x1=1, x2=1) == 2
-        assert j(x1=1, x2=2) == 4
-
-
-class ProjectionTestCase(unittest.TestCase):
-    def test_projection_oneVarRel(self):
-
-        # u1 is a relation with a single variable :
-        x1 = Variable("x1", ["a", "b", "c"])
-        u1 = NAryMatrixRelation([x1], np.array([2, 4, 8], np.int8))
-
-        # take the projection of u1 along x1
-        p = pydcop.dcop.relations.projection(u1, x1)
-
-        # the dimension must be one less than the dimension of u1
-        assert p.arity == 0
-
-        # this means that p is actually a signle value, corresponding to the
-        # max of u1
-        assert p.get_value_for_assignment() == 8
-
-    def test_projection_min_oneVarRel(self):
-        # u1 is a relation with a single variable :
-        x1 = Variable("x1", ["a", "b", "c"])
-        u1 = NAryMatrixRelation([x1], np.array([2, 4, 8], np.int8))
-
-        # take the projection of u1 along x1
-        p = pydcop.dcop.relations.projection(u1, x1, mode="min")
-
-        # the dimension must be one less than the dimension of u1
-        assert p.arity == 0
-
-        # this means that p is actually a signle value, corresponding to the
-        # max of u1
-        assert p.get_value_for_assignment() == 2
-
-    def test_projection_twoVarsRel(self):
-
-        x1 = Variable("x1", ["a", "b", "c"])
-        x2 = Variable("x2", ["1", "2"])
-        u1 = NAryMatrixRelation(
-            [x1, x2], np.array([[2, 16], [4, 32], [8, 64]], np.int8)
-        )
-
-        # take the projection of u1 along x1
-        p = pydcop.dcop.relations.projection(u1, x1)
-
-        # the dimension must be one less than the dimension of u1, it should
-        # contain only x2
-        assert p.arity == 1
-        assert p.dimensions == [x2]
-
-        # the max of u1 when setting x2<-1 is 8
-        assert p.get_value_for_assignment(["1"]) == 8
-
-        # the max of u1 when setting x2<-2 is 64
-        assert p.get_value_for_assignment(["2"]) == 64
-
-    def test_projection_min_twoVarsRel(self):
-        x1 = Variable("x1", ["a", "b", "c"])
-        x2 = Variable("x2", ["1", "2"])
-        u1 = NAryMatrixRelation(
-            [x1, x2], np.array([[2, 16], [4, 32], [8, 64]], np.int8)
-        )
-
-        # take the projection of u1 along x1
-        p = pydcop.dcop.relations.projection(u1, x1, mode="min")
-
-        # the dimension must be one less than the dimension of u1, it should
-        # contain only x2
-        assert p.arity == 1
-        assert p.dimensions == [x2]
-
-        # the min of u1 when setting x2<-1 is 2
-        assert p.get_value_for_assignment(["1"]) == 2
-
-        # the min of u1 when setting x2<-2 is 16
-        assert p.get_value_for_assignment(["2"]) == 16

@@ -2,10 +2,8 @@
 # DCOP name is mandatory.
 name: 'dcop yaml sample format'
 # The desciption is optional and can span several lines if needed
-description: |
-  This serves as a informal specification
-  of the yaml-based ddcop serialization format.
-  Note: in the description field, use the "|" yaml syntax for long string (see this example).
+description: This serves as a informal specification
+             of the yaml-based ddcop serialization format.
 
 # Objective is mandatory and can be min or max
 objective: min
@@ -214,4 +212,25 @@ hosting_costs:
   a3:
     default: 10
 
+
+# distribution_hints contains additional information that can be used during
+# the distribution phase.
+distribution_hints:
+
+  must_host:
+    # a pair agent_name : [list of variables or cconstraints names]
+    # This means that computation dealing specificaly with one of these variable 
+    # or computation MUST be hosted on this agent.
+    a1: [var1]
+    a2: [var2, var3]
+
+  host_with:
+    # a pair variable name: list of constraint or variable names
+    # of constraint name: list of constraint or variable names
+    # indicates if the computation for this variable should be hosted on the 
+    # same agent as some other variables / agents.
+    # This info is may be used by some distribution methods but not necessarily 
+    # all of them.
+    var1: [c1, c2]
+    c3: [a2]
 

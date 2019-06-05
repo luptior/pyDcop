@@ -52,7 +52,7 @@ class DCOP(object):
     Given these elements, the goal is to find an assignment of values to
     variables that minimizes the sum of the costs from the constants.
 
-    In pyDcop, a DCOP does not contains the mapping \mu as this mapping
+    In pyDcop_wMailer, a DCOP does not contains the mapping \mu as this mapping
     depends on the algorithm used to solve the constraints optimization.
 
     """

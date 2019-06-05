@@ -508,7 +508,7 @@ def load_scenario(scenario_str) -> Scenario:
     :param scenario_str:
     :return:
     """
-    loaded = yaml.load(scenario_str, Loader=yaml.FullLoader)
+    loaded = yaml.load(scenario_str)
     evts = []
     for evt in loaded["events"]:
         id_evt = evt["id"]
