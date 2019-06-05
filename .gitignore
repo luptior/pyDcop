@@ -76,3 +76,6 @@ target/
 *pulp.sol
 /.python-version
 /.vscode/settings.json
+
+# PyCharm temp
+.DS_Store
