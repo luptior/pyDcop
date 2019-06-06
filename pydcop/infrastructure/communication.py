@@ -32,6 +32,7 @@
 import json
 import logging
 import socket
+import sys
 from collections import namedtuple, defaultdict
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from json import JSONDecodeError
@@ -581,6 +582,19 @@ class Messaging(object):
             msg_type, _, t, full_msg = self._queue.get(block=True, timeout=timeout)
             if self._delay and msg_type == MSG_ALGO:
                 sleep(self._delay)
+
+                """
+                where the delay based on size can come in
+                if we want to use this method, then rather than the actual value will be used, 
+                self._delay will be a boolean
+                size: the size of the message size in bytes
+                """
+                size = sys.getsizeof(full_msg)
+                print(f"full_msg is {size} bytes")
+                # delay = sending_time_size(size)
+                # sleep(delay)
+
+                # sleep(self._delay)
             return full_msg, t
         except Empty:
             return None, None
