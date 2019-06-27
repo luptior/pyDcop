@@ -45,6 +45,7 @@ import requests
 from requests.exceptions import ConnectionError
 
 from pydcop.infrastructure.discovery import UnknownComputation, UnknownAgent
+from pydcop.infrastructure.network_optimization import predication
 from pydcop.utils.simple_repr import simple_repr, from_repr
 
 logger = logging.getLogger("infrastructure.communication")
