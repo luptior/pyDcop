@@ -31,6 +31,7 @@
 
 import json
 import logging
+import pickle
 import socket
 import sys
 from collections import namedtuple, defaultdict
@@ -494,6 +495,247 @@ class MPCHttpHandler(BaseHTTPRequestHandler):
         pass
 
 
+class TcpCommunicationLayer(CommunicationLayer):
+    """
+    This class implements the CommunicationLayer protocol.
+
+    It uses an tcp server and client to send and receive messages.
+
+    It'll be used for easiler manipulation of package.
+
+    Parameters
+    ----------
+    address_port: optional tuple (str, int)
+        The IP address and port this TcpCommunicationLayer will be
+        listening on.
+        If the ip address or the port are not given ,we try to use the
+        primary IP address (i.e. the one with a default route) and listen on
+        port 9000.
+
+    on_error: str
+        Indicates how error when sending a message will be
+        handled, possible value are 'ignore', 'retry', 'fail'
+
+    """
+
+    def __init__(
+        self,
+        address_port: Optional[Tuple[str, int]] = None,
+        on_error: Optional[str] = "ignore",
+    ):
+        super().__init__(on_error)
+        # how to deal with self._address
+        if not address_port:
+            self._address = find_local_ip(), 9000
+        else:
+            ip_addr, port = address_port
+            ip_addr = ip_addr if ip_addr else find_local_ip()
+            ip_addr = ip_addr if ip_addr else "0.0.0.0"
+            port = port if port else 9000
+            self._address = ip_addr, port
+
+        self.logger = logging.getLogger(
+            "infrastructure.communication.TcpCommunicationLayer"
+        )
+        self._start_server()
+
+    def shutdown(self):
+        self.logger.info("Shutting down TcpCommunicationLayer " "on %s", self.address)
+        self.listening_socket.close()
+
+    def _start_server(self):
+        # start a server listening for messages
+        self.logger.info(
+            "Starting http server for TcpCommunicationLayer " "on %s", self.address
+        )
+
+        # initialize socket
+        listening_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        # bind socket
+        try:
+            listening_socket.bind(self._address)
+            # listening_socket.listen(20)
+        except OSError:
+            self.logger.error(
+                "Cannot bind tcp server on adress {}".format(self.address)
+            )
+            raise
+        self.listening_socket=listening_socket
+
+        # Creating and starting the 'listen' thread
+        listen = Thread(name="tcp_thread", target=self.listen_func,args=(listening_socket), daemon=True)
+        listen.start()
+
+    def listen_func(msgs, sock, agent):
+        """
+        Continuously listens on the IP and Port specified in 'sock', and stores the
+        messages in the dict 'msgs', until an 'exit' message is received. See
+        comments in the source code for more information.
+        """
+
+        if agent == None:
+            agent_id = 'No agent'
+        else:
+            agent_id = agent.id
+        print
+        str(agent_id) + ': Begin listen_func'
+
+        while True:
+            # The 'data' which is received should be the pickled string
+            # representation of a tuple.
+            # The first element of the tuple should be the data title, a name given
+            # to describe the data.
+            # This first element will become the key of the 'msgs' dict.
+            # The second element should be the actual data to be passed.
+            # Loop ends when an exit message is sent.
+
+            # UDP
+            # data, addr = sock.recvfrom(65536)
+            # udata = pickle.loads(data) # Unpickled data
+
+            # TCP
+            connectionSocket, addr = sock.accept()
+
+            total_data = []
+            while True:
+                data = connectionSocket.recv(4096).decode()
+                if not data:
+                    break
+                total_data.append(data)
+            data = ''.join(total_data)
+
+            """
+            the optimization comes into play
+            """
+            size = sys.getsizeof(data)
+
+            def tran_time(size):
+                # return 0.1 + size / 100
+                return 0.1 / size + (size ^ 2) / 10000.
+
+            def loss(s):
+                # return a loss rate based on size
+                return 1. / (1. + 1. / (s / 10. ** 3))
+
+            def divide_sleep(size):
+                if np.random.ranf() >= loss(size):
+                    # successfully transmitted
+                    sleep(tran_time(size))
+                else:
+                    # divide and send, timeout 10s
+                    sleep(5)
+                    divide_sleep(size / 2)
+                    divide_sleep(size / 2)
+
+            def proactive(size):
+                # given a know relationship between size and expectation of delivery time
+                # precalculated the function argmin = 7.9 ,so take 8 here
+                if size <= 8:
+                    while np.random.ranf() < loss(size):
+                        sleep(5)
+                    else:
+                        sleep(tran_time(size))
+                else:
+                    num = size / 8
+                    last = size % 8
+                    for i in range(num):
+                        # for the packages of size 8
+                        while np.random.ranf() < loss(8):
+                            sleep(5)
+                        else:
+                            sleep(tran_time(8))
+                    # for the last package
+                    if last != 0:
+                        while np.random.ranf() < loss(last):
+                            sleep(5)
+                        else:
+                            sleep(tran_time(last))
+
+            do_divide = True
+            proac = False
+            if do_divide == True:
+                divide_sleep(size)
+            elif proac == True:
+                proactive(size)
+            else:
+                while np.random.ranf() < loss(size):
+                    sleep(5)
+                else:
+                    sleep(tran_time(size))
+
+            udata = pickle.loads(data)  # Unpickled data
+
+            msgs[udata[0]] = udata[1]
+            print
+            str(agent_id) + ': Msg received, size is ' + str(len(data)) + " bytes\n" + udata[0] + ": " + str(udata[1])
+            if str(udata[1]) == "exit":
+                print
+                str(agent_id) + ': End listen_func'
+                return
+
+    @property
+    def address(self) -> Tuple[str, int]:
+        """
+        An address that can be used to sent messages to this communication
+        layer.
+
+        :return the address as a (ip, port) tuple
+        """
+        return self._address
+
+    def send_msg(
+            self,
+            src_agent: str,
+            dest_agent: str,
+            msg: ComputationMessage,
+            on_error=None
+    ):
+        """
+        Send msg from src_agent to dest_agent.
+
+        :param src_agent:
+        :param dest_agent:
+        :param msg: the message to send
+        :param on_error: how to handle failure when sending the message.
+        When used, this parameter overrides the behavior set when building
+        the TcpCommunicationLayer.
+        :return:
+        """
+
+        on_error = on_error if on_error is not None else self._on_error
+        try:
+            server, port = self.discovery.agent_address(dest_agent)
+        except UnknownAgent:
+            logger.warning(
+                f"Sending message from {src_agent} to unknown agent {dest_agent} :"
+                f" {msg} "
+            )
+            return self._on_send_error(
+                src_agent, dest_agent, msg, on_error, UnknownAgent
+            )
+
+        # TCP send msg
+        msg_repr = simple_repr(msg.msg)
+        pdata = pickle.dumps(msg_repr)
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # TCP
+        sock.connect((server, port))
+        sock.send(pdata.encode())
+
+        sock.close()
+
+        return True
+
+    def __str__(self):
+        return "TcpCommunicationLayer({}:{})".format(*self._address)
+
+
+
+
+
+
 MSG_MGT = 10
 MSG_VALUE = 15
 MSG_ALGO = 20
@@ -583,19 +825,6 @@ class Messaging(object):
             msg_type, _, t, full_msg = self._queue.get(block=True, timeout=timeout)
             if self._delay and msg_type == MSG_ALGO:
                 sleep(self._delay)
-
-                """
-                where the delay based on size can come in
-                if we want to use this method, then rather than the actual value will be used, 
-                self._delay will be a boolean
-                size: the size of the message size in bytes
-                """
-                size = sys.getsizeof(full_msg)
-                print(f"full_msg is {size} bytes")
-                # delay = sending_time_size(size)
-                # sleep(delay)
-
-                # sleep(self._delay)
             return full_msg, t
         except Empty:
             return None, None
