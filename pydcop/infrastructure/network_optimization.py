@@ -41,6 +41,42 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, RBF
 
 
+"""
+def divide_sleep(size):
+    if np.random.ranf() >= loss(size):
+        # successfully transmitted
+        sleep(tran_time(size))
+    else:
+        # divide and send, timeout 10s
+        sleep(5)
+        divide_sleep(size / 2)
+        divide_sleep(size / 2)
+
+
+def proactive(size):
+    # given a know relationship between size and expectation of delivery time
+    # precalculated the function argmin = 7.9 ,so take 8 here
+    if size <= 8:
+        while np.random.ranf() < loss(size):
+            sleep(5)
+        else:
+            sleep(tran_time(size))
+    else:
+        num = size / 8
+        last = size % 8
+        for i in range(num):
+            # for the packages of size 8
+            while np.random.ranf() < loss(8):
+                sleep(5)
+            else:
+                sleep(tran_time(8))
+        # for the last package
+        if last != 0:
+            while np.random.ranf() < loss(last):
+                sleep(5)
+            else:
+                sleep(tran_time(last))
+"""
 # def posterior_predictive(X_s, X_train, Y_train, l=1.0, sigma_f=1.0, sigma_y=1e-8):
 #     K = kernel(X_train, X_train, l, sigma_f) + sigma_y ** 2 * np.eye(len(X_train))
 #     K_s = kernel(X_train, X_s, l, sigma_f)
