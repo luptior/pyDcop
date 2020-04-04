@@ -74,7 +74,7 @@ Options
   The distribution algorithm (``oneagent``, ``adhoc``, ``ilp_fgdp``, etc.,
   see :ref:`concepts_distribution`).
 
-``--cost <distribution_method_for_cost>``
+        ``--cost <distribution_method_for_cost>``
   A distribution method that can be used to evaluate the cost of a
   distribution. If not given, defaults to ``<distribution_method>``. If the
   distribution method does not define cost, a cost None will be returned in
@@ -143,8 +143,13 @@ Example output::
 """
 
 import logging
+import os
+import threading
+import traceback
 from importlib import import_module
 import sys
+import time
+
 import yaml
 
 from pydcop.algorithms import list_available_algorithms, load_algorithm_module
@@ -155,12 +160,17 @@ from pydcop.distribution.objects import ImpossibleDistributionException
 logger = logging.getLogger("pydcop.cli.distribute")
 
 
+output_file = None
+start_t = None
+result = {}
+
 def set_parser(subparsers):
 
     algorithms = list_available_algorithms()
 
     parser = subparsers.add_parser("distribute", help="distribute a static dcop")
     parser.set_defaults(func=run_cmd)
+    parser.set_defaults(on_timeout=on_timeout)
 
     parser.add_argument(
         "dcop_files", type=str, nargs="+", metavar="FILE", help="dcop file(s)"
@@ -177,14 +187,26 @@ def set_parser(subparsers):
     parser.add_argument(
         "-d",
         "--distribution",
-        choices=["oneagent", "adhoc", "ilp_fgdp", "ilp_compref", "heur_comhost"],
+        choices=[
+            "oneagent",
+            "adhoc",
+            "ilp_fgdp",
+            "ilp_compref",
+            "heur_comhost",
+            "gh_secp_cgdp",
+            "gh_secp_fgdp",
+            "oilp_secp_fgdp",
+            "oilp_secp_cgdp",
+            "oilp_cgdp",
+            "gh_cgdp",
+        ],
         required=True,
         help="Algorithm for distributing the computation " "graph.",
     )
 
     parser.add_argument(
         "--cost",
-        choices=["ilp_compref"],
+        choices=["ilp_compref", "oilp_secp_fgdp", "oilp_secp_cgdp", "oilp_cgdp"],
         default=None,
         help="algorithm for computing the cost of the " "distribution.",
     )
@@ -201,7 +223,7 @@ def set_parser(subparsers):
     )
 
 
-def run_cmd(args):
+def run_cmd(args, timer=None, timeout=None):
     logger.debug('dcop command "distribute" with arguments {} '.format(args))
 
     dcop_yaml_files = args.dcop_files
@@ -232,6 +254,9 @@ def run_cmd(args):
     else:
         _error("You must pass at leat --graph or --algo option")
 
+    global output_file
+    output_file = args.output
+
     # Build factor-graph computation graph
     logger.info("Building computation graph for dcop {}".format(dcop_yaml_files))
     cg = graph_module.build_computation_graph(dcop)
@@ -245,18 +270,39 @@ def run_cmd(args):
         computation_memory = algo_module.computation_memory
         communication_load = algo_module.communication_load
 
+    global result
+    result.update({
+            "inputs": {
+                "dist_algo": args.distribution,
+                "dcop": args.dcop_files,
+                "graph": graph_type,
+                "algo": args.algo,
+            },
+            "status": "PROGRESS"
+        })
+    
     try:
+        global start_t
+        start_t = time.time()
+        if not timeout:
+            timeout = 3600
+        # Warning: some methods may not honor the timeout parameter
         distribution = dist_module.distribute(
             cg,
             dcop.agents.values(),
             hints=dcop.dist_hints,
             computation_memory=computation_memory,
             communication_load=communication_load,
+            timeout=timeout
         )
+        duration = time.time() - start_t
         dist = distribution.mapping()
 
+        if timer:
+            timer.cancel()
+
         if cost_module:
-            cost, _, _ = cost_module.distribution_cost(
+            cost, comm, hosting = cost_module.distribution_cost(
                 distribution,
                 cg,
                 dcop.agents.values(),
@@ -264,7 +310,7 @@ def run_cmd(args):
                 communication_load=communication_load,
             )
         else:
-            cost = None
+            cost, comm, hosting = None, None, None
 
         result = {
             "inputs": {
@@ -272,9 +318,13 @@ def run_cmd(args):
                 "dcop": args.dcop_files,
                 "graph": graph_type,
                 "algo": args.algo,
+                "duration": duration,
             },
             "distribution": dist,
             "cost": cost,
+            "communication_cost": comm,
+            "hosting_cost": hosting,
+            "status": "SUCCESS"
         }
         if args.output is not None:
             with open(args.output, encoding="utf-8", mode="w") as fo:
@@ -282,10 +332,52 @@ def run_cmd(args):
         print(yaml.dump(result))
         sys.exit(0)
 
-    except ImpossibleDistributionException as e:
-        result = {"status": "FAIL", "error": str(e)}
+    except TimeoutError as e:
+        if timer:
+            timer.cancel()
+        duration = time.time() - start_t
+        result["status"] = "TIMEOUT"
+        result["inputs"]["duration"] = duration
+
+        if output_file is not None:
+            with open(output_file, encoding="utf-8", mode="w") as fo:
+                fo.write(yaml.dump(result))
         print(yaml.dump(result))
-        sys.exit(2)
+        sys.exit(0)
+
+    except ImpossibleDistributionException as e:
+        if timer:
+            timer.cancel()
+        result["status"] = "FAIL"
+        result["error"] = str(e)
+        if output_file is not None:
+            with open(output_file, encoding="utf-8", mode="w") as fo:
+                fo.write(yaml.dump(result))
+        print(yaml.dump(result))
+        sys.exit(0)
+
+
+def on_timeout():
+    global result, output_file
+    global start_t
+    duration = time.time() - start_t
+
+    print("TIMEOUT when distributing")
+    logger.info("cli timeout when distributing")
+    for th in threading.enumerate():
+        print(th)
+        traceback.print_stack(sys._current_frames()[th.ident])
+
+    result["status"] =  "TIMEOUT"
+    result["inputs"]["duration"] = duration
+
+    if output_file is not None:
+        with open(output_file, encoding="utf-8", mode="w") as fo:
+            fo.write(yaml.dump(result))
+    print(yaml.dump(result))
+
+    #os._exit(0)
+    sys.exit(0)
 
 
 def load_distribution_module(dist):

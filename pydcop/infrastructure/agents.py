@@ -321,7 +321,7 @@ class Agent(object):
         """
         return self._comm.address
 
-    def start(self):
+    def start(self, run_computations = False):
         """
         Starts the agent.
 
@@ -347,6 +347,7 @@ class Agent(object):
                                  .format(self.name))
         self.logger.info('Starting agent %s ', self.name)
         self._running = True
+        self.run_computations = run_computations
         self._start_t = perf_counter()
         self.t.start()
 
@@ -400,13 +401,13 @@ class Agent(object):
         for c in list(self._computations.values()):
             if computations is None:
                 if c.is_running:
-                    self.logger.debug('Do not start computation %s, already '
+                    self.logger.debug(f'Do not start computation {c.name}, already '
                                       'running')
                 else:
                     c.start()
             elif c.name in computations:
                 if c.is_running:
-                    self.logger.debug('Do not start computation %s, already '
+                    self.logger.debug(f'Do not start computation {c.name}, already '
                                       'running')
                 else:
                     c.start()
@@ -719,7 +720,7 @@ class Agent(object):
         else:
             total_t = perf_counter() - self._run_t
             activity_ratio = self.t_active / (total_t)
-        own_computations = { c.name for c in self.computations()}
+        own_computations = { c.name for c in self.computations(include_technical=True)}
         m = {
             'count_ext_msg': {k: v
                               for k, v in self._messaging.count_ext_msg.items()
@@ -787,6 +788,8 @@ class Agent(object):
         try:
             self._running = True
             self._on_start()
+            if self.run_computations:
+                self.run()
             while not self._stopping.is_set():
                 # Process messages, if any
                 full_msg, t = self._messaging.next_msg(0.05)
@@ -841,7 +844,7 @@ class Agent(object):
         if self._start_t is not None :
             for cb, (p, last_t) in list(self._periodic_cb.items()):
                 if ct - last_t >= p:
-                    self.logger.info('periodic cb %s, %s %s ', cb, ct, last_t)
+                    # self.logger.debug('periodic cb %s, %s %s ', cb, ct, last_t)
                     # Must update the cb entry BEFORE calling the cb, in case
                     # the cb attemps to modify (e.g. remove) it's own entry by
                     # calling remove_periodic_action
@@ -1322,16 +1325,40 @@ class ResilientAgent(Agent):
             self.logger.info('All repair computations have finished, '
                              'selected computation : %s',
                              selected_computations)
-            self._on_repair_done(selected_computations)
+
+            metrics = self.metrics()
+            print(f" metrics repair {self.name} - {metrics}")
+            repair_metrics = {'count_ext_msg' : {}, 'size_ext_msg': {} , 'cycles' :{}}
+
+            for c in self._repair_computations.values():
+                c_name = c.computation.name
+                if c_name in metrics['count_ext_msg']:
+                    repair_metrics['count_ext_msg'][c_name] = metrics['count_ext_msg'][c_name]
+                else:
+                    repair_metrics['count_ext_msg'][c_name] = 0
+                if c_name in metrics['size_ext_msg']:
+                    repair_metrics['size_ext_msg'][c_name] = metrics['size_ext_msg'][c_name]
+                else:
+                    repair_metrics['size_ext_msg'][c_name] = 0
+                if c_name in metrics['cycles']:
+                    repair_metrics['cycles'][c_name] = metrics['cycles'][c_name]
+                else:
+                    repair_metrics['cycles'][c_name] = 0
+
+            print(f" {self.name} : metrics after repair  {repair_metrics}")
+            self._on_repair_done(selected_computations, repair_metrics)
 
             if selected_computations:
                 self.logger.info('Re-replicate newly activated computations '
                                  'on  %s : %s , level %s', self.name,
                                  selected_computations,
                                  self._replication_level)
-                self.replication_comp.replicate(self._replication_level,
-                                                selected_computations)
-
+                try:
+                    self.replication_comp.replicate(self._replication_level,
+                                                    selected_computations)
+                except UnknownComputation:
+                    # avoid crashing if one of the neighbor comp is not repaired yet
+                    pass
                 self.logger.info('Starting newly activated computations on '
                                  '%s : %s ', self.name,
                                  selected_computations)

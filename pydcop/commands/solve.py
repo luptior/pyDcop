@@ -279,7 +279,7 @@ def set_parser(subparsers):
         "-c",
         "--collect_on",
         choices=["value_change", "cycle_change", "period"],
-        default="value_change",
+        default=None,
         help='When should a "new" assignment be observed',
     )
 
@@ -344,6 +344,8 @@ def set_parser(subparsers):
         "given, no ui-server will be started for any "
         "agent.",
     )
+
+DISTRIBUTION_METHODS = ["oneagent", "adhoc", "ilp_fgdp", "heur_comhost", "oilp_secp_fgdp", "gh_secp_fgdp", "gh_secp_cgdp", "oilp_cgdp", "gh_cgdp"]
 
 
 dcop = None
@@ -456,7 +458,7 @@ def run_cmd(args, timer=None, timeout=None):
 
     csv_cb = prepare_metrics_files(args.run_metrics, args.end_metrics, collect_on)
 
-    if args.distribution in ["oneagent", "adhoc", "ilp_fgdp", "heur_comhost"]:
+    if args.distribution in DISTRIBUTION_METHODS:
         dist_module, algo_module, graph_module = _load_modules(
             args.distribution, args.algo
         )
@@ -466,6 +468,7 @@ def run_cmd(args, timer=None, timeout=None):
     global dcop
     logger.info("loading dcop from {}".format(args.dcop_files))
     dcop = load_dcop_from_file(args.dcop_files)
+    logger.debug(f"dcop  {dcop} ")
 
     # Build factor-graph computation graph
     logger.info("Building computation graph ")
@@ -579,7 +582,8 @@ def on_timeout():
     logger.debug("stop orchestrator on cli timeout ")
     orchestrator.stop()
     _results("TIMEOUT")
-    sys.exit(0)
+    # sys.exit(0)
+    os._exit(2)
 
 
 def on_force_exit(sig, frame):
@@ -589,6 +593,7 @@ def on_force_exit(sig, frame):
     orchestrator.stop_agents(5)
     orchestrator.stop()
     _results("STOPPED")
+    os._exit(2)
 
 
 import numpy as np

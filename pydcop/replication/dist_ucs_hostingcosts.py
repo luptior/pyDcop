@@ -41,9 +41,12 @@ from typing import List, Dict, Tuple, Set, Iterable, Union
 
 from pydcop.algorithms import ComputationDef
 from pydcop.infrastructure.agents import Agent
-from pydcop.infrastructure.computations import MessagePassingComputation, Message, \
-    register
-from pydcop.infrastructure.discovery import Discovery, Address
+from pydcop.infrastructure.computations import (
+    MessagePassingComputation,
+    Message,
+    register,
+)
+from pydcop.infrastructure.discovery import Discovery, Address, UnknownComputation
 from pydcop.replication.path_utils import (
     Node,
     Path,
@@ -186,6 +189,11 @@ class UCSReplicateMessage(Message):
     def hosts(self) -> List[AgentName]:
         return self._hosts
 
+    @property
+    def size(self):
+        table_size = sum(len(p) for _, p in self._paths)
+        return len(self.hosts) + len(self._visited) + len(self._rq_path)
+
     def __str__(self):
         return "UCSReplicateMessage({}, {}, {}, {}, {})".format(
             self.computation_def.name,
@@ -284,12 +292,16 @@ class UCSReplication(MessagePassingComputation):
         self.agent = agent
         self.agt_name = agent.name
         self.agent_def = agent.agent_def
-        self.computations = {}  # type: Dict[ComputationName, Tuple[ComputationDef, float]]
+        self.computations = (
+            {}
+        )  # type: Dict[ComputationName, Tuple[ComputationDef, float]]
         self.discovery = discovery
         self.k_target = k_target
 
         # Replicas hosted by this agent (with their footprint):
-        self._hosted_replicas = {}  # type: Dict[ComputationName, Tuple[AgentName, float]]
+        self._hosted_replicas = (
+            {}
+        )  # type: Dict[ComputationName, Tuple[AgentName, float]]
 
         # Computation definitions for the replica hosted by this agent
         self.replicas = {}  # type: Dict[ComputationName, ComputationDef]
@@ -1055,7 +1067,8 @@ class UCSReplication(MessagePassingComputation):
     def _replicate_on_agent_lost(self, agent: AgentName):
         """
         Re-launch replication for computation which had a replica hosted on
-        a removed agent
+        a removed agent.
+
         Parameters
         ----------
         agent: AgentName
@@ -1094,7 +1107,13 @@ class UCSReplication(MessagePassingComputation):
                             self._replica_hosts[removed_replica],
                         )
                 else:
-                    self.replicate(missing_replica, removed_replica)
+                    try:
+                        self.replicate(missing_replica, removed_replica)
+                    except UnknownComputation :
+                        # Avoid crashing if the computation is not known at the moment
+                        # This can happen (and is perfectly valid) if we are currently
+                        # repairing this computation.
+                        pass
 
     def _answer_lost_requests(self, agent: AgentName):
         lost_rqs = [
@@ -1104,8 +1123,30 @@ class UCSReplication(MessagePassingComputation):
         ]
         for rq in lost_rqs:
             self.logger.warning("Lost request %s : %s", rq, self._pending_requests[rq])
-            # TODO: fake answer for pending request
-            self._pending_requests.pop(rq)
+            rq_agt, rq_comp = rq
+            # send a fake answer for pending request, to avoid blocking replication
+            (
+                budget,
+                spent,
+                rq_path,
+                paths,
+                visited,
+                comp_def,
+                footprint,
+                replica_count,
+                hosts,
+            ) = self._pending_requests[rq]
+            self.on_replicate_answer(
+                budget,
+                spent,
+                rq_path,
+                paths,
+                visited,
+                comp_def,
+                footprint,
+                replica_count,
+                hosts,
+            )
 
         pass
 

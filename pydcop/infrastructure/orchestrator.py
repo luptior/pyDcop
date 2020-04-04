@@ -27,8 +27,6 @@
 # CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
-
-
 import threading
 from queue import Queue
 from time import perf_counter
@@ -42,10 +40,12 @@ import time
 import yaml
 
 from pydcop.algorithms import AlgorithmDef, ComputationDef
+from pydcop.commands.distribute import load_algo_module
 from pydcop.dcop.relations import filter_assignment_dict
 from pydcop.computations_graph.objects import ComputationGraph
 from pydcop.dcop.dcop import DCOP
 from pydcop.dcop.scenario import Scenario
+from pydcop.distribution import gh_cgdp
 from pydcop.distribution.objects import Distribution
 from pydcop.infrastructure.agents import Agent, AgentException
 from pydcop.infrastructure.communication import CommunicationLayer, MSG_MGT
@@ -243,7 +243,7 @@ class Orchestrator(object):
         self._mgt_method('_orchestrator_start_replication', k_target)
 
     def run(self, scenario: Scenario=None,
-            timeout: Optional[float]=None):
+            timeout: Optional[float]=None, repair_only=False):
         """Run the DCOP, with a scenario if given.
 
         When `run()` is called, the orchestrator asks all orchestrated agents to
@@ -261,6 +261,7 @@ class Orchestrator(object):
             itself, must be stopped.
 
         """
+        self.repair_only = repair_only
         self.logger.info('Waiting until agents are ready to run')
         self.mgt.ready_to_run.wait()
         self.logger.info('Requesting agents to run')
@@ -310,6 +311,9 @@ class Orchestrator(object):
 
     def end_metrics(self):
         return self.mgt.global_metrics('END', self.mgt.last_agt_stop_time)
+
+    def replication_metrics(self):
+        return self.mgt._replication_metrics
 
     def wait_ready(self):
         """Blocks until the Orchestrator is ready to perform another action.
@@ -387,7 +391,7 @@ RunAgentMessage = message_type('run_computations', ['computations'])
 ReplicateComputationsMessage = message_type('replication', ['k'])
 
 ComputationReplicatedMessage = message_type('replicated',
-                                            ['agent', 'replica_hosts'])
+                                            ['agent', 'replica_hosts', 'metrics'])
 
 PauseMessage = message_type('pause_computations', ['computations'])
 
@@ -431,7 +435,7 @@ ComputationFinishedMessage = message_type(
 AgentRemovedMessage = message_type('agent_removed', [])
 
 RepairDoneMessage = message_type('repair_done',
-                                 ['agent', 'selected_computations'])
+                                 ['agent', 'selected_computations', 'metrics'])
 
 class RepairRunMessage(Message):
     """
@@ -569,7 +573,7 @@ class AgentsMgt(MessagePassingComputation):
                  orchestrator_agent: Agent, orchestrator: Orchestrator,
                  infinity=float('inf'),
                  collector: Queue=None,
-                 collect_moment: str='value_change',
+                 collect_moment= None,
                  collect_period: float=None):
         super().__init__(ORCHESTRATOR_MGT)
         self._orchestrator_agent = orchestrator_agent
@@ -577,6 +581,7 @@ class AgentsMgt(MessagePassingComputation):
         self.discovery = self._orchestrator_agent.discovery
 
         self._algo = algo
+        self._algo_module = load_algo_module(algo.algo)
         self.graph = cg
         self._dcop = dcop
         self.infinity = infinity
@@ -626,12 +631,15 @@ class AgentsMgt(MessagePassingComputation):
         self._current_cycle = 0
         self._agt_cycle_metrics = defaultdict(lambda: {})
         self._agent_cycle_values = defaultdict(lambda: {})
+        self._replication_metrics = {}
         # used to detect the end of a cycle
         self._computation_cycle = defaultdict(lambda: set())
 
         self._computation_status = {n.name : '' for n in self.graph.nodes}
 
         self.dist_count = 0
+
+        self.repair_metrics = {}
 
     @property
     def type(self):
@@ -779,6 +787,8 @@ class AgentsMgt(MessagePassingComputation):
             self.logger.info('Agent %s(%s) has finished replicating its '
                              'computations : %s - waiting for %s',
                              msg.agent, sender, msg, waited)
+            # self._agent_cycle_values[self._current_cycle]
+            self._replication_metrics[msg.agent] = msg.metrics
             if not waited:
                 self.logger.info('All computations have been replicated')
                 self.ready_to_run.set()
@@ -863,6 +873,7 @@ class AgentsMgt(MessagePassingComputation):
                                       cycle_end, msg.computation)
 
     def _on_metrics_msg(self, sender: str, msg: MetricsMessage, t):
+
         # Called when receiving a metric message from one of the
         # orchestrated agent. The metric message contains the metrics for
         # all the computations hosted by this agent.
@@ -928,7 +939,8 @@ class AgentsMgt(MessagePassingComputation):
             if agt == 'orchestrator':
                 continue
             computations = self.initial_dist.computations_hosted(agt)
-            self._send_mgt_msg(agt, RunAgentMessage(computations))
+            if not self._orchestrator.repair_only:
+                self._send_mgt_msg(agt, RunAgentMessage(computations))
             self._agts_state[agt] = 'running'
 
     def _orchestrator_start_replication(self, msg, *_):
@@ -947,7 +959,8 @@ class AgentsMgt(MessagePassingComputation):
         self.logger.debug('Scenario event from : %s',  msg)
 
         # Pause the current dcop before injecting the event
-        self._request_pause()
+        if not self._orchestrator.repair_only:
+            self._request_pause()
 
         evt = msg.content
         leaving_agents = []
@@ -986,7 +999,11 @@ class AgentsMgt(MessagePassingComputation):
             # If the departed agent was not hosting any computation, simply resume the
             # system
             self.logger.info("No orphaned computation, resuming computations ")
-            self._request_resume()
+            self._dump_repair_metrics("OK", 0)
+            if not self._orchestrator.repair_only:
+                self._request_resume()
+            self.dist_count += 1
+            self.repair_metrics.clear()
             return
 
         orphaned_replicas = {o: self.discovery.replica_agents(o) for o in
@@ -1044,6 +1061,7 @@ class AgentsMgt(MessagePassingComputation):
                     'Agent %s ready for repair with computations %s, '
                     'all agents ready, sending repair_run to %s', msg.agent,
                     msg.computations, ready)
+                self.repair_start = time.perf_counter()
                 for agt in ready:
                     self._send_mgt_msg(agt, RepairRunMessage())
                     self._agts_state[agt] = 'repair_run'
@@ -1057,6 +1075,7 @@ class AgentsMgt(MessagePassingComputation):
                           f'selected {msg.selected_computations}')
         try:
             current_agt_state = self._agts_state[msg.agent]
+            self.repair_metrics[msg.agent] = msg.metrics
         except KeyError:
             self.logger.error('Unexpected repair done message from agent %s '
                               'with no registered state %s : %s',
@@ -1074,55 +1093,72 @@ class AgentsMgt(MessagePassingComputation):
                                  msg.agent, waited)
             else:
                 done_time = perf_counter() - self.start_time
-
+                repair_duration = time.perf_counter() - self.repair_start
                 # Restore all repair agents to running state
                 for a in self._agts_state:
                     if self._agts_state[a] == 'repair_done':
                         self._agts_state[a] = "running"
 
-
-                d = time.perf_counter() - self.start_profile
-                # Now that the reparation process is finished, resume,
+                # Now that the reparation process is finished, dump metrics and resume
                 # all computation from the original dcop
-                self.logger.info('Repair done on agent %s, all agents done, '
-                                 'resuming computations',
-                                 msg.agent)
-
-                # Dump current distribution
-                dist = {a: self.discovery.agent_computations(a)
-                        for a in self.discovery.agents()}
-                result = {
-                    'inputs': {
-                        'dist_algo': 'repair',
-                    },
-                    'distribution': dist,
-                }
-                f_name = 'evtdist_{}.yaml'.format(self.dist_count)
-                with open(f_name, mode='w', encoding='utf-8') as f:
-                    f.write(yaml.dump(result))
-                self.dist_count += 1
-
-                # Resume all computation now that everything is ok
-                self._request_resume()
 
                 # Check if all orphaned computations have been re-hosted.
                 lost_orphaned = [c for c, s in self._comps_state.items()
                                  if s is None]
+                repair_status = "OK"
                 if lost_orphaned:
                     self.logger.error('Repair process is finished but they '
                                       'are still some orphaned computations !'
                                       ' %s', lost_orphaned)
-                    # Dump repair time
-                    f_name = 'repair.yaml'
-                    with open(f_name, mode='a', encoding='utf-8') as f:
-                        f.write(f"{self.dist_count}, {self.removal_time}, {done_time}, "
-                                f"{d}, FAILED\n")
-                else:
-                    # Dump repair time
-                    f_name = 'repair.yaml'
-                    with open(f_name, mode='a', encoding='utf-8') as f:
-                        f.write(f"{self.dist_count}, {self.removal_time}, {done_time},"
-                                f"{d}, OK\n")
+                    repair_status = "KO"
+
+                self._dump_repair_metrics(repair_status, repair_duration)
+
+               # Resume all computation now that everything is ok
+                self.logger.info('Repair done on agent %s, all agents done, '
+                                 'resuming computations',
+                                 msg.agent)
+                if not self._orchestrator.repair_only:
+                    self._request_resume()
+                self.dist_count += 1
+                self.repair_metrics.clear()
+
+    def _dump_repair_metrics(self, repair_status, repair_duration ):
+        # Dump current distribution
+        dist = {a: self.discovery.agent_computations(a)
+                for a in self.discovery.agents()}
+        result = {
+            'inputs': {
+                'dist_algo': 'repair',
+            },
+            "duration": repair_duration,
+            'distribution': dist,
+            "metrics": self.repair_metrics,
+            "status": repair_status
+        }
+
+        try:
+            cost, comm, hosting = gh_cgdp.distribution_cost(
+                Distribution(dist),
+                self.graph,
+                self._dcop.agents.values(),  # AgentDef s
+                computation_memory=self._algo_module.computation_memory,
+                communication_load=self._algo_module.communication_load,
+            )
+            result["cost"] = cost
+            result["communication_cost"] = comm
+            result["hosting_cost"] = hosting
+        except Exception as e:
+            self.logger.error("Could not distribute ")
+            cost, comm, hosting = None, None, None
+            result["cost"] = None
+            result["communication_cost"] = None
+            result["hosting_cost"] = None
+            result["cost_error"] = str(e)
+
+        f_name = 'evtdist_{}.yaml'.format(self.dist_count)
+        with open(f_name, mode='w', encoding='utf-8') as f:
+            f.write(yaml.dump(result))
 
     def _request_pause(self, agents=None):
         if agents is None:
